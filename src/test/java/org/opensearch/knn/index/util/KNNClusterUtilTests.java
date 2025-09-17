@@ -6,6 +6,7 @@
 package org.opensearch.knn.index.util;
 
 import org.opensearch.Version;
+import org.opensearch.cluster.metadata.IndexNameExpressionResolver;
 import org.opensearch.cluster.service.ClusterService;
 import org.opensearch.knn.KNNTestCase;
 
@@ -19,7 +20,7 @@ public class KNNClusterUtilTests extends KNNTestCase {
         ClusterService clusterService = mockClusterService(Version.V_2_4_0);
 
         final KNNClusterUtil knnClusterUtil = KNNClusterUtil.instance();
-        knnClusterUtil.initialize(clusterService);
+        knnClusterUtil.initialize(clusterService, mock(IndexNameExpressionResolver.class));
 
         final Version minVersion = knnClusterUtil.getClusterMinVersion();
 
@@ -30,7 +31,7 @@ public class KNNClusterUtilTests extends KNNTestCase {
         ClusterService clusterService = mockClusterService(Version.V_2_3_0);
 
         final KNNClusterUtil knnClusterUtil = KNNClusterUtil.instance();
-        knnClusterUtil.initialize(clusterService);
+        knnClusterUtil.initialize(clusterService, mock(IndexNameExpressionResolver.class));
 
         final Version minVersion = knnClusterUtil.getClusterMinVersion();
 
@@ -42,7 +43,7 @@ public class KNNClusterUtilTests extends KNNTestCase {
         when(clusterService.state()).thenThrow(new RuntimeException("Cluster state is not ready"));
 
         final KNNClusterUtil knnClusterUtil = KNNClusterUtil.instance();
-        knnClusterUtil.initialize(clusterService);
+        knnClusterUtil.initialize(clusterService, mock(IndexNameExpressionResolver.class));
 
         final Version minVersion = knnClusterUtil.getClusterMinVersion();
 

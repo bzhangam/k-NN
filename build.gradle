@@ -379,7 +379,7 @@ task windowsPatches(type:Exec) {
 
 tasks.register('cmakeJniLib', Exec) {
     def args = []
-    args.add("cmake")
+    args.add("/opt/homebrew/bin/cmake")
     args.add("-S jni") // CMakelists.txt directory
     args.add("-B jni/build") // Build directory
     args.add("-DKNN_PLUGIN_VERSION=${opensearch_version}")
@@ -405,6 +405,14 @@ tasks.register('cmakeJniLib', Exec) {
         args.add("-DLAPACK_LIBRARIES=$rootDir\\src\\main\\resources\\windowsDependencies\\libopenblas.dll")
     }
 
+    // macOS/Linux OpenBLAS
+    if (!Os.isFamily(Os.FAMILY_WINDOWS)) {
+        def openblasRoot = System.getenv('OPENBLAS_ROOT') ?: '/opt/homebrew/opt/openblas'
+        args.add("-DBLAS_LIBRARIES=${openblasRoot}/lib/libopenblas.dylib")
+        args.add("-DLAPACK_LIBRARIES=${openblasRoot}/lib/libopenblas.dylib")
+        args.add("-DBLAS_INCLUDE_DIR=${openblasRoot}/include")
+    }
+
     // Print the command that will be executed
     logger.lifecycle("CMake command: ${args.join(' ')}")
     def outputStream = new ByteArrayOutputStream()
@@ -421,7 +429,7 @@ tasks.clean.doFirst {
 tasks.register('buildJniLib', Exec) {
     dependsOn cmakeJniLib
     def args = []
-    args.add("cmake")
+    args.add("/opt/homebrew/bin/cmake")
     args.add("--build")
     args.add("jni/build")
     args.add("--target")
