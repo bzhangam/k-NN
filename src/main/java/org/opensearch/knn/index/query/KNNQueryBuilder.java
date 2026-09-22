@@ -26,6 +26,7 @@ import org.opensearch.index.query.QueryBuilderVisitor;
 import org.opensearch.index.query.QueryRewriteContext;
 import org.opensearch.index.query.QueryShardContext;
 import org.opensearch.index.query.WithFieldName;
+import org.opensearch.search.retriever.RetrieverWindowAware;
 import org.opensearch.knn.index.SpaceType;
 import org.opensearch.knn.index.VectorDataType;
 import org.opensearch.knn.index.VectorQueryType;
@@ -74,7 +75,7 @@ import static org.opensearch.knn.index.query.parser.RescoreParser.RESCORE_PARAME
 // The builder validates the member variables so access to the constructor is prohibited to not accidentally bypass validations
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Log4j2
-public class KNNQueryBuilder extends AbstractQueryBuilder<KNNQueryBuilder> implements WithFieldName {
+public class KNNQueryBuilder extends AbstractQueryBuilder<KNNQueryBuilder> implements WithFieldName, RetrieverWindowAware {
     private static ModelDao modelDao;
 
     public static final ParseField VECTOR_FIELD = new ParseField("vector");
@@ -373,6 +374,46 @@ public class KNNQueryBuilder extends AbstractQueryBuilder<KNNQueryBuilder> imple
     @Override
     public String fieldName() {
         return this.fieldName;
+    }
+
+    /**
+     * Align this query's candidate cap to a fusion retriever's {@code rank_window_size} (see
+     * {@link RetrieverWindowAware}). A knn query always has exactly one of {@code k} / {@code min_score} /
+     * {@code max_distance} set (enforced at parse time), giving two relevant modes:
+     * <ul>
+     *   <li><b>k mode</b> (count-bounded): returns the {@code k} nearest.
+     *     <ul>
+     *       <li>{@code k >= window} — sufficient to fill the window; accept as-is (never shrink a larger user
+     *           {@code k}, which only helps recall — the fused window truncates anyway).</li>
+     *       <li>{@code k < window} — the user explicitly asked for fewer candidates than the window needs,
+     *           which would silently leave the fused window incomplete; reject so the misconfiguration is
+     *           surfaced rather than hidden (consistent with rejecting an explicit leg [size] under fusion).</li>
+     *     </ul>
+     *   </li>
+     *   <li><b>min_score / max_distance mode</b> (threshold-bounded): the candidate count is defined by the
+     *       score/distance threshold, not a count knob, so there is nothing to align. The leg's {@code size}
+     *       (set to the window by the retriever) truncates the threshold set. No-op.</li>
+     * </ul>
+     */
+    @Override
+    public void applyRetrieverWindow(int window) {
+        // Threshold modes have no count knob to align — size truncation applies. (In these modes k is null.)
+        if (k == null) {
+            return;
+        }
+        if (k < window) {
+            throw new IllegalArgumentException(
+                String.format(
+                    "[%s] [k] (%d) is smaller than the enclosing [rank_fusion] [rank_window_size] (%d); a leg that "
+                        + "returns fewer than [rank_window_size] candidates leaves the fused window incomplete. Set "
+                        + "[k] >= [rank_window_size], or raise [rank_window_size].",
+                    NAME,
+                    k,
+                    window
+                )
+            );
+        }
+        // k >= window: sufficient, leave as-is.
     }
 
     /**
