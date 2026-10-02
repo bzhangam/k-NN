@@ -7,7 +7,6 @@ package org.opensearch.knn.search.processor.mmr;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.log4j.Log4j2;
-import org.apache.commons.lang3.tuple.Pair;
 import org.opensearch.action.search.SearchRequest;
 import org.opensearch.action.search.SearchResponse;
 import org.opensearch.action.search.SearchResponseSections;
@@ -206,63 +205,33 @@ public class MMRRerankProcessor implements SearchResponseProcessor, SystemGenera
         boolean isFloatVector,
         Map<String, MMRExplainInfo> explainInfoMap
     ) {
-        List<SearchHit> selected = new ArrayList<>();
-        Map<String, Float> simCache = new HashMap<>();
-        final boolean collectExplain = explainInfoMap != null;
-
-        while (selected.size() < targetSize && !candidates.isEmpty()) {
-
-            Pair<SearchHit, Double> bestCandidate = null;
-            double bestScore = Double.NEGATIVE_INFINITY;
-            float bestMaxSimToSelected = 0.0f;
-
-            for (SearchHit candidate : candidates) {
-                String candidateId = candidate.getId();
-                float maxSimToSelected = 0.0f;
-
-                for (SearchHit sel : selected) {
-                    String selId = sel.getId();
-                    String key = cacheKey(candidateId, selId);
-                    String symKey = cacheKey(selId, candidateId);
-
-                    float sim = simCache.computeIfAbsent(key, k -> {
-                        if (isFloatVector) {
-                            return similarityFunction.compare((float[]) docVectors.get(candidateId), (float[]) docVectors.get(selId));
-                        } else {
-                            return similarityFunction.compare((byte[]) docVectors.get(candidateId), (byte[]) docVectors.get(selId));
-                        }
-                    });
-
-                    simCache.putIfAbsent(symKey, sim);
-                    maxSimToSelected = Math.max(maxSimToSelected, sim);
-                }
-
-                double score = (1 - diversity) * candidate.getScore() - diversity * maxSimToSelected;
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestMaxSimToSelected = maxSimToSelected;
-                    bestCandidate = Pair.of(candidate, score);
-                }
-            }
-
-            if (bestCandidate != null) {
-                SearchHit bestHit = bestCandidate.getLeft();
-
-                if (collectExplain) {
-                    MMRExplainInfo explainInfo = MMRExplainInfo.builder()
-                        .originalScore(bestHit.getScore())
-                        .maxSimilarityToSelected(bestMaxSimToSelected)
-                        .mmrScore(bestCandidate.getRight())
-                        .diversity(diversity)
-                        .build();
-                    explainInfoMap.put(bestHit.getId(), explainInfo);
-                }
-
-                selected.add(bestHit);
-                candidates.remove(bestHit);
-            }
+        // Delegate the greedy selection to the shared MMRSelector so the pipeline and the diversify retriever
+        // run one implementation. Candidate order is the response order (unchanged from before this refactor),
+        // which is the deterministic tie-break the selector honors.
+        final Map<String, SearchHit> hitsById = new HashMap<>();
+        final List<String> orderedIds = new ArrayList<>(candidates.size());
+        final Map<String, Float> idToScore = new HashMap<>();
+        for (SearchHit hit : candidates) {
+            hitsById.put(hit.getId(), hit);
+            orderedIds.add(hit.getId());
+            idToScore.put(hit.getId(), hit.getScore());
         }
 
+        final List<String> selectedIds = MMRSelector.select(
+            orderedIds,
+            docVectors,
+            idToScore,
+            similarityFunction,
+            diversity,
+            targetSize,
+            isFloatVector,
+            explainInfoMap
+        );
+
+        final List<SearchHit> selected = new ArrayList<>(selectedIds.size());
+        for (String id : selectedIds) {
+            selected.add(hitsById.get(id));
+        }
         return selected;
     }
 
@@ -305,10 +274,6 @@ public class MMRRerankProcessor implements SearchResponseProcessor, SystemGenera
             Map<String, Object> filtered = filter.apply(hit.getSourceAsMap());
             hit.sourceRef(BytesReference.bytes(XContentFactory.jsonBuilder().map(filtered)));
         }
-    }
-
-    private String cacheKey(String id1, String id2) {
-        return String.join(":", id1, id2);
     }
 
     // This processor will be executed pre the user defined search request processor if there is any. Since

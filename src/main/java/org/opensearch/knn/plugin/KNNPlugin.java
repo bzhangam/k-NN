@@ -94,6 +94,7 @@ import org.opensearch.knn.plugin.transport.UpdateModelMetadataTransportAction;
 import org.opensearch.knn.profile.query.KNNMetrics;
 import org.opensearch.knn.quantization.models.quantizationState.QuantizationStateCache;
 import org.opensearch.knn.search.extension.MMRSearchExtBuilder;
+import org.opensearch.knn.search.retriever.DiversifyRetrieverBuilder;
 
 import org.opensearch.knn.search.processor.mmr.MMRKnnQueryTransformer;
 import org.opensearch.knn.search.processor.mmr.MMROverSampleProcessor;
@@ -126,6 +127,7 @@ import org.opensearch.search.SearchExtBuilder;
 import org.opensearch.search.deciders.ConcurrentSearchRequestDecider;
 import org.opensearch.search.pipeline.SearchRequestProcessor;
 import org.opensearch.search.pipeline.SearchResponseProcessor;
+import org.opensearch.search.retriever.RetrieverPlugin;
 import org.opensearch.search.pipeline.SystemGeneratedProcessor;
 import org.opensearch.threadpool.ExecutorBuilder;
 import org.opensearch.threadpool.FixedExecutorBuilder;
@@ -133,6 +135,7 @@ import org.opensearch.threadpool.ThreadPool;
 import org.opensearch.transport.client.Client;
 import org.opensearch.watcher.ResourceWatcherService;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -192,7 +195,8 @@ public class KNNPlugin extends Plugin
         ExtensiblePlugin,
         SystemIndexPlugin,
         ReloadablePlugin,
-        SearchPipelinePlugin {
+        SearchPipelinePlugin,
+        RetrieverPlugin {
 
     public static final String LEGACY_KNN_BASE_URI = "/_opendistro/_knn";
     public static final String KNN_BASE_URI = "/_plugins/_knn";
@@ -504,6 +508,17 @@ public class KNNPlugin extends Plugin
     @Override
     public List<SearchExtSpec<?>> getSearchExts() {
         return List.of(new SearchExtSpec<SearchExtBuilder>(MMRSearchExtBuilder.NAME, MMRSearchExtBuilder::new, MMRSearchExtBuilder::parse));
+    }
+
+    @Override
+    public List<RetrieverPlugin.RetrieverSpec<?>> getRetrievers() {
+        return List.of(new RetrieverPlugin.RetrieverSpec<>(DiversifyRetrieverBuilder.NAME, parser -> {
+            try {
+                return DiversifyRetrieverBuilder.fromXContent(parser);
+            } catch (IOException e) {
+                throw new IllegalArgumentException("Failed to parse [" + DiversifyRetrieverBuilder.NAME + "] retriever", e);
+            }
+        }));
     }
 
     @Override

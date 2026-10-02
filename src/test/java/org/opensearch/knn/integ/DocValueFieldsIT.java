@@ -1418,6 +1418,84 @@ public class DocValueFieldsIT extends KNNRestTestCase {
         deleteKNNIndex(indexName);
     }
 
+    /**
+     * Verifies that on a quantized index (on_disk mode with aggressive compression, where the ANN
+     * graph stores a lossy/quantized copy of each vector), docvalue_fields still returns the
+     * ORIGINAL full-precision vector — not the quantized reconstruction.
+     *
+     * <p>This is the property MMR / the diversify retriever depends on: pairwise similarity must be
+     * computed on the true indexed vectors. Doc values are written from the original vector
+     * (KNN80DocValuesConsumer.addBinaryField), independently of the compressed graph, so the value
+     * returned here must match the indexed value at full float precision.
+     */
+    @SneakyThrows
+    public void testDocValueFields_quantizedOnDiskIndex_returnsOriginalPrecisionVectors() {
+        // Use a dimension divisible by 8 (required by several compression levels) and distinctive,
+        // non-round component values so a lossy reconstruction would visibly differ from the original.
+        final int dim = 8;
+        final String indexName = TEST_INDEX + "_quantized_on_disk";
+        final float[] originalVector = { 0.123456f, -1.987654f, 3.141592f, -2.718281f, 0.577215f, -1.414213f, 2.236067f, -0.301029f };
+
+        String mapping = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("properties")
+            .startObject(VECTOR_FIELD)
+            .field("type", "knn_vector")
+            .field("dimension", dim)
+            .field("space_type", SpaceType.L2.getValue())
+            // on_disk mode + high compression => the ANN graph stores a heavily quantized copy.
+            .field("mode", "on_disk")
+            .field("compression_level", "32x")
+            .endObject()
+            .endObject()
+            .endObject()
+            .toString();
+
+        createKnnIndex(indexName, mapping);
+        addKnnDoc(indexName, "1", VECTOR_FIELD, Floats.asList(originalVector).toArray());
+        refreshIndex(indexName);
+        forceMergeKnnIndex(indexName);
+
+        String query = XContentFactory.jsonBuilder()
+            .startObject()
+            .startObject("query")
+            .startObject("match_all")
+            .endObject()
+            .endObject()
+            .startArray("docvalue_fields")
+            .startObject()
+            .field("field", VECTOR_FIELD)
+            .field("format", "array")
+            .endObject()
+            .endArray()
+            .field("_source", false)
+            .endObject()
+            .toString();
+
+        Response response = searchKNNIndex(indexName, query, 1);
+        String responseBody = EntityUtils.toString(response.getEntity());
+        List<Map<String, Object>> hits = parseSearchHits(responseBody);
+
+        assertEquals(1, hits.size());
+        assertNull("_source should be disabled", hits.get(0).get("_source"));
+        List<List<Double>> vectorField = getDocValueField(hits.get(0), VECTOR_FIELD);
+        assertNotNull("quantized index should still return the vector via docvalue_fields", vectorField);
+        assertEquals(dim, vectorField.get(0).size());
+
+        // Full float precision: doc values are the original vector, NOT the quantized graph copy.
+        // Tolerance is float round-trip epsilon (1e-6), far tighter than any quantization error.
+        for (int i = 0; i < dim; i++) {
+            assertEquals(
+                "docvalue_fields on a quantized index must return original precision at index " + i,
+                originalVector[i],
+                vectorField.get(0).get(i).floatValue(),
+                1e-6f
+            );
+        }
+
+        deleteKNNIndex(indexName);
+    }
+
     // Nested field tests
 
     /**
